@@ -63,8 +63,6 @@ movies['crew'] = movies['crew'].apply(lambda x: [i.replace(" ", "") for i in x])
 
 movies['tags'] = movies['overview'] + movies['genres'] + movies['keywords'] + movies['cast'] + movies['crew']
 new_df = movies[['movie_id', 'title', 'tags']].copy()
-new_df['tags'] = new_df['tags'].apply(lambda x: " ".join(x).lower())
-new_df['tags'] = new_df['tags'].apply(lemma)
 
 # --- OPTIMIZATION 1: Reduce vocabulary size ---
 print("Vectorizing text with reduced features...")
