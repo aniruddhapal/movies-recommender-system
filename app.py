@@ -1,102 +1,85 @@
-# app.py
-import streamlit as st
-import pickle
+# create_artifacts.py
 import pandas as pd
-import requests
-import time
+import numpy as np # Import numpy
+import ast
+import pickle
+import os
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from nltk.stem import WordNetLemmatizer
+import nltk
 
-# --- Use a Session object for persistent connections ---
-session = requests.Session()
+# Create Artifacts Directory
+ARTIFACTS_DIR = 'artifacts'
+if not os.path.exists(ARTIFACTS_DIR):
+    os.makedirs(ARTIFACTS_DIR)
+    print(f"Created directory: {ARTIFACTS_DIR}")
 
-# --- The Caching Decorator ---
-# This is the key to solving the problem. Streamlit will store the result
-# of this function. If it's called again with the same movie_id, it will
-# return the stored result instantly without running the function or hitting the API.
-# The cache is cleared when the app is restarted.
-@st.cache_data
-def fetch_poster(movie_id):
-    """
-    Fetches the movie poster from The Movie Database (TMDB) API with retry logic.
-    This function is cached to avoid repeated API calls for the same movie.
-    """
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key=2f488a95dfb2437a9d3fb1933cf19074&language=en-US"
-            response = session.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            poster_path = data.get('poster_path')
-            if poster_path:
-                print(f"SUCCESS: Fetched poster for movie_id {movie_id}")
-                return "https://image.tmdb.org/t/p/w500/" + poster_path
-            else:
-                return None
-        except (requests.exceptions.RequestException, ConnectionResetError) as e:
-            print(f"API request failed for movie_id {movie_id} (Attempt {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(0.5 * (attempt + 1))
-            else:
-                print(f"All retries failed for movie_id {movie_id}.")
-                return None
-    return None
+print("Loading data...")
+credits = pd.read_csv('data/tmdb_5000_credits.csv')
+movies_df = pd.read_csv('data/tmdb_5000_movies.csv')
+movies_df = movies_df.merge(credits, on='title')
 
-# The caching for this function is even more important. It caches the entire
-# list of recommended names and posters for a given movie title.
-@st.cache_data
-def recommend(movie):
-    """
-    Recommends 5 similar movies. The entire recommendation list is cached.
-    """
-    try:
-        movie_index = movies[movies['title'] == movie].index[0]
-        distances = similarity[movie_index]
-        movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
-        
-        recommended_movies = []
-        recommended_movies_posters = []
-        for i in movies_list:
-            movie_id = movies.iloc[i[0]].movie_id
-            recommended_movies.append(movies.iloc[i[0]].title)
-            # This will now use the cached version of fetch_poster if available
-            recommended_movies_posters.append(fetch_poster(movie_id))
-            
-        return recommended_movies, recommended_movies_posters
-    except IndexError:
-        st.error("Movie not found in the dataset. Please select another one.")
-        return [], []
+# --- Feature Selection & Preprocessing ---
+movies = movies_df[['movie_id', 'title', 'overview', 'genres', 'keywords', 'cast', 'crew']]
+movies.dropna(inplace=True)
 
-# --- Load Artifacts ---
-try:
-    movies_dict = pickle.load(open('artifacts/movies_list.pkl', 'rb'))
-    movies = pd.DataFrame(movies_dict)
-    similarity = pickle.load(open('artifacts/similarity.pkl', 'rb'))
-except FileNotFoundError:
-    st.error("Model artifacts not found. Please run `create_artifacts.py` first.")
-    st.stop()
+# Helper functions (they remain the same)
+def safe_literal_eval(obj):
+    try: return ast.literal_eval(obj)
+    except (ValueError, SyntaxError): return []
 
-# --- Streamlit UI ---
-st.set_page_config(layout="wide")
-st.title('🎬 Content-Based Movie Recommender')
-st.markdown("Select a movie to get five similar recommendations!")
+def convert_top_3(obj):
+    L = []
+    counter = 0
+    for i in safe_literal_eval(obj):
+        if counter != 3: L.append(i['name']); counter += 1
+        else: break
+    return L
 
-selected_movie_name = st.selectbox(
-    'Select a movie you like:',
-    movies['title'].values
-)
+def fetch_director(obj):
+    L = []
+    for i in safe_literal_eval(obj):
+        if i['job'] == 'Director': L.append(i['name']); break
+    return L
 
-if st.button('Recommend', key='recommend_button'):
-    # When the button is clicked, we call the cached recommend function
-    names, posters = recommend(selected_movie_name)
-    
-    if names:
-        cols = st.columns(5)
-        for i in range(5):
-            with cols[i]:
-                st.text(names[i])
-                if posters[i]:
-                    st.image(posters[i])
-                else:
-                    st.warning("Poster not available")
-    else:
-        st.warning("Could not find recommendations.")
+lemmatizer = WordNetLemmatizer()
+def lemma(text):
+    y = [];
+    for i in text.split(): y.append(lemmatizer.lemmatize(i))
+    return " ".join(y)
+
+print("Preprocessing and Feature Engineering...")
+movies['genres'] = movies['genres'].apply(convert_top_3)
+movies['keywords'] = movies['keywords'].apply(convert_top_3)
+movies['cast'] = movies['cast'].apply(convert_top_3)
+movies['crew'] = movies['crew'].apply(fetch_director)
+movies['overview'] = movies['overview'].apply(lambda x: x.split())
+
+movies['genres'] = movies['genres'].apply(lambda x: [i.replace(" ", "") for i in x])
+movies['keywords'] = movies['keywords'].apply(lambda x: [i.replace(" ", "") for i in x])
+movies['cast'] = movies['cast'].apply(lambda x: [i.replace(" ", "") for i in x])
+movies['crew'] = movies['crew'].apply(lambda x: [i.replace(" ", "") for i in x])
+
+movies['tags'] = movies['overview'] + movies['genres'] + movies['keywords'] + movies['cast'] + movies['crew']
+new_df = movies[['movie_id', 'title', 'tags']].copy()
+new_df['tags'] = new_df['tags'].apply(lambda x: " ".join(x).lower())
+new_df['tags'] = new_df['tags'].apply(lemma)
+
+# --- OPTIMIZATION 1: Reduce vocabulary size ---
+print("Vectorizing text with reduced features...")
+cv = CountVectorizer(max_features=4000, stop_words='english') # Reduced from 5000 to 4000
+vectors = cv.fit_transform(new_df['tags']).toarray()
+
+# --- OPTIMIZATION 2: Change data type to save memory ---
+print("Calculating cosine similarity with float32...")
+similarity = cosine_similarity(vectors).astype(np.float32) # Convert to float32
+
+# --- Save Artifacts ---
+print("Saving artifacts...")
+# Check the new size
+print(f"New similarity matrix size: {similarity.nbytes / (1024*1024):.2f} MB")
+pickle.dump(new_df.to_dict(), open(os.path.join(ARTIFACTS_DIR, 'movies_list.pkl'), 'wb'))
+pickle.dump(similarity, open(os.path.join(ARTIFACTS_DIR, 'similarity.pkl'), 'wb'))
+
+print("Artifacts created successfully!")
