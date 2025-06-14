@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+venv/
+.venv/
+
+# Data - Never commit raw data or large artifacts
+data/
+artifacts/
+*.pkl
