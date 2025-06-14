@@ -14,13 +14,6 @@ if not os.path.exists(ARTIFACTS_DIR):
     os.makedirs(ARTIFACTS_DIR)
     print(f"Created directory: {ARTIFACTS_DIR}")
 
-# --- Download NLTK Data (if not already present) ---
-try:
-    nltk.data.find('corpora/wordnet.zip')
-except nltk.downloader.DownloadError:
-    print("Downloading NLTK 'wordnet' data...")
-    nltk.download('wordnet')
-
 print("Loading data...")
 credits = pd.read_csv('data/tmdb_5000_credits.csv')
 movies_df = pd.read_csv('data/tmdb_5000_movies.csv')
