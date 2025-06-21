@@ -1,83 +1,92 @@
-# create_artifacts.py
-import pandas as pd
-import numpy as np # Import numpy
-import ast
+# app.py
+import streamlit as st
 import pickle
+import pandas as pd
+import requests
 import os
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from nltk.stem import WordNetLemmatizer
-import nltk
 
-# Create Artifacts Directory
-ARTIFACTS_DIR = 'artifacts'
-if not os.path.exists(ARTIFACTS_DIR):
-    os.makedirs(ARTIFACTS_DIR)
-    print(f"Created directory: {ARTIFACTS_DIR}")
+# --- No more data processing imports like CountVectorizer or nltk ---
 
-print("Loading data...")
-credits = pd.read_csv('data/tmdb_5000_credits.csv')
-movies_df = pd.read_csv('data/tmdb_5000_movies.csv')
-movies_df = movies_df.merge(credits, on='title')
+session = requests.Session()
 
-# --- Feature Selection & Preprocessing ---
-movies = movies_df[['movie_id', 'title', 'overview', 'genres', 'keywords', 'cast', 'crew']]
-movies.dropna(inplace=True)
+# The @st.cache_data decorator is still very important for the API calls
+@st.cache_data
+def fetch_poster(movie_id):
+    """
+    Fetches the movie poster from The Movie Database (TMDB) API.
+    """
+    try:
+        url = f"https://api.themoviedb.org/3/movie/{movie_id}?2f488a95dfb2437a9d3fb1933cf19074&language=en-US"
+        response = session.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        poster_path = data.get('poster_path')
+        if poster_path:
+            return "https://image.tmdb.org/t/p/w500/" + poster_path
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed for movie_id {movie_id}: {e}")
+    return None
 
-# Helper functions (they remain the same)
-def safe_literal_eval(obj):
-    try: return ast.literal_eval(obj)
-    except (ValueError, SyntaxError): return []
+def recommend(movie):
+    """
+    Recommends 5 similar movies based on the pre-computed similarity matrix.
+    """
+    try:
+        # Find the index of the movie that was selected
+        movie_index = movies[movies['title'] == movie].index[0]
+        
+        # Get the similarity scores for that movie with all other movies
+        distances = similarity[movie_index]
+        
+        # Sort the movies based on the similarity scores and get the top 5
+        movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
+        
+        recommended_movies = []
+        recommended_movies_posters = []
+        for i in movies_list:
+            movie_id = movies.iloc[i[0]].movie_id
+            recommended_movies.append(movies.iloc[i[0]].title)
+            recommended_movies_posters.append(fetch_poster(movie_id))
+            
+        return recommended_movies, recommended_movies_posters
+    except IndexError:
+        st.error("Movie not found in the dataset.")
+        return [], []
 
-def convert_top_3(obj):
-    L = []
-    counter = 0
-    for i in safe_literal_eval(obj):
-        if counter != 3: L.append(i['name']); counter += 1
-        else: break
-    return L
+# --- Load Pre-Computed Artifacts ---
+print("Loading pre-computed artifacts...")
+try:
+    # We load the dataframe of movies
+    movies_dict = pickle.load(open('artifacts/movies_list.pkl', 'rb'))
+    movies = pd.DataFrame(movies_dict)
 
-def fetch_director(obj):
-    L = []
-    for i in safe_literal_eval(obj):
-        if i['job'] == 'Director': L.append(i['name']); break
-    return L
+    # We load the final similarity matrix
+    similarity = pickle.load(open('artifacts/similarity.pkl', 'rb'))
+except FileNotFoundError:
+    st.error("Model artifacts not found. This might happen on the first deploy. The app should auto-restart shortly.")
+    st.stop()
+print("Artifacts loaded successfully.")
 
-lemmatizer = WordNetLemmatizer()
-def lemma(text):
-    y = [];
-    for i in text.split(): y.append(lemmatizer.lemmatize(i))
-    return " ".join(y)
+# --- Streamlit UI ---
+st.set_page_config(layout="wide")
+st.title('🎬 Content-Based Movie Recommender')
+st.markdown("Select a movie to get five similar recommendations!")
 
-print("Preprocessing and Feature Engineering...")
-movies['genres'] = movies['genres'].apply(convert_top_3)
-movies['keywords'] = movies['keywords'].apply(convert_top_3)
-movies['cast'] = movies['cast'].apply(convert_top_3)
-movies['crew'] = movies['crew'].apply(fetch_director)
-movies['overview'] = movies['overview'].apply(lambda x: x.split())
+selected_movie_name = st.selectbox(
+    'Which movie have you enjoyed?',
+    movies['title'].values
+)
 
-movies['genres'] = movies['genres'].apply(lambda x: [i.replace(" ", "") for i in x])
-movies['keywords'] = movies['keywords'].apply(lambda x: [i.replace(" ", "") for i in x])
-movies['cast'] = movies['cast'].apply(lambda x: [i.replace(" ", "") for i in x])
-movies['crew'] = movies['crew'].apply(lambda x: [i.replace(" ", "") for i in x])
-
-movies['tags'] = movies['overview'] + movies['genres'] + movies['keywords'] + movies['cast'] + movies['crew']
-new_df = movies[['movie_id', 'title', 'tags']].copy()
-
-# --- OPTIMIZATION 1: Reduce vocabulary size ---
-print("Vectorizing text with reduced features...")
-cv = CountVectorizer(max_features=4000, stop_words='english') # Reduced from 5000 to 4000
-vectors = cv.fit_transform(new_df['tags']).toarray()
-
-# --- OPTIMIZATION 2: Change data type to save memory ---
-print("Calculating cosine similarity with float32...")
-similarity = cosine_similarity(vectors).astype(np.float32) # Convert to float32
-
-# --- Save Artifacts ---
-print("Saving artifacts...")
-# Check the new size
-print(f"New similarity matrix size: {similarity.nbytes / (1024*1024):.2f} MB")
-pickle.dump(new_df.to_dict(), open(os.path.join(ARTIFACTS_DIR, 'movies_list.pkl'), 'wb'))
-pickle.dump(similarity, open(os.path.join(ARTIFACTS_DIR, 'similarity.pkl'), 'wb'))
-
-print("Artifacts created successfully!")
+if st.button('Recommend'):
+    with st.spinner('Finding recommendations for you...'):
+        names, posters = recommend(selected_movie_name)
+        
+        if names:
+            cols = st.columns(5)
+            for i in range(5):
+                with cols[i]:
+                    st.text(names[i])
+                    if posters[i]:
+                        st.image(posters[i])
+                    else:
+                        st.warning("Poster not available")
