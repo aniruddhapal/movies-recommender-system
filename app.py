@@ -15,8 +15,13 @@ def fetch_poster(movie_id):
     """
     Fetches the movie poster from The Movie Database (TMDB) API.
     """
+    api_key = os.environ.get('TMDB_API_KEY', '')
+    if not api_key:
+        print("TMDB_API_KEY environment variable not set.")
+        return None
+    
     try:
-        url = f"https://api.themoviedb.org/3/movie/{movie_id}?34deaf5c79c331da9ce21a6e19f7227a&language=en-US"
+        url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&language=en-US"
         response = session.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -66,6 +71,8 @@ except FileNotFoundError:
     st.error("Model artifacts not found. This might happen on the first deploy. The app should auto-restart shortly.")
     st.stop()
 print("Artifacts loaded successfully.")
+
+st.info(f"API Key being used: '{os.environ.get('TMDB_API_KEY', 'Key not found')}'")
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")
