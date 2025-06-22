@@ -72,7 +72,7 @@ except FileNotFoundError:
     st.stop()
 print("Artifacts loaded successfully.")
 
-st.info(f"API Key being used: '{os.environ.get('TMDB_API_KEY', 'Key not found')}'")
+#st.info(f"API Key being used: '{os.environ.get('TMDB_API_KEY', 'Key not found')}'")
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")
